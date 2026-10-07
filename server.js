@@ -7,6 +7,7 @@ const authRoutes = require("./src/routes/authRoutes");
 const bookRoutes = require("./src/routes/bookRoutes");
 const paymentRoutes = require("./src/routes/paymentRoutes");
 const reservationRoutes = require("./src/routes/reservationRoutes");
+const librarianRoutes = require("./src/routes/librarianRoutes");
 
 
 dotenv.config();
@@ -35,7 +36,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/books", bookRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/reservations", reservationRoutes);
-
+app.use("/api/librarian", librarianRoutes);
 
 const PORT = process.env.PORT || 5000;
 
