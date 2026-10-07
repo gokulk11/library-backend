@@ -10,6 +10,7 @@ const reservationRoutes = require("./src/routes/reservationRoutes");
 const librarianRoutes = require("./src/routes/librarianRoutes");
 const borrowingRoutes = require("./src/routes/borrowingRoutes");
 const adminRoutes = require("./src/routes/adminRoutes");
+const bookingRoutes = require("./src/routes/bookingRoutes");
 
 
 dotenv.config();
@@ -41,6 +42,7 @@ app.use("/api/reservations", reservationRoutes);
 app.use("/api/librarian", librarianRoutes);
 app.use("/api/borrowings", borrowingRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/bookings", bookingRoutes);
 
 const PORT = process.env.PORT || 5000;
 

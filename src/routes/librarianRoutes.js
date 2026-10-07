@@ -1,8 +1,8 @@
 const express = require("express");
 
 const {
-  scanReservation,
-  verifyPayment,
+  scanBooking,
+  verifyBookingPayment,
   returnBook,
 } = require("../controllers/librarianController");
 
@@ -17,14 +17,14 @@ router.post(
   "/scan",
   protect,
   authorize("librarian", "admin"),
-  scanReservation
+  scanBooking
 );
 
 router.post(
   "/verify-payment",
   protect,
   authorize("librarian", "admin"),
-  verifyPayment
+  verifyBookingPayment
 );
 
 router.post(

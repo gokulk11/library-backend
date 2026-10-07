@@ -1,45 +1,48 @@
+const Booking = require("../models/Booking");
 const Payment = require("../models/Payment");
-const Reservation = require("../models/Reservation");
 
+
+// Customer presses "I Paid"
 const claimPayment = async (req, res) => {
   try {
-    const { reservationId } = req.body;
+    const { bookingId } = req.body;
 
-    if (!reservationId) {
+    if (!bookingId) {
       return res.status(400).json({
         success: false,
-        message: "Reservation ID is required",
+        message: "Booking ID is required",
       });
     }
 
-    const reservation = await Reservation.findOne({
-      _id: reservationId,
+    const booking = await Booking.findOne({
+      _id: bookingId,
       userId: req.user.userId,
-    }).populate("bookId");
+    });
 
-    if (!reservation) {
+    if (!booking) {
       return res.status(404).json({
         success: false,
-        message: "Reservation not found",
+        message: "Booking not found",
       });
     }
 
-    if (reservation.status !== "pending") {
+    if (booking.status !== "pending") {
       return res.status(400).json({
         success: false,
-        message: "Payment cannot be claimed for this reservation",
+        message:
+            "Payment cannot be claimed for this booking",
       });
     }
 
-    if (new Date() > reservation.expiresAt) {
+    if (new Date() > booking.expiresAt) {
       return res.status(400).json({
         success: false,
-        message: "Reservation has expired",
+        message: "Booking has expired",
       });
     }
 
     const existingPayment = await Payment.findOne({
-      reservationId: reservation._id,
+      bookingId: booking._id,
     });
 
     if (existingPayment) {
@@ -51,21 +54,24 @@ const claimPayment = async (req, res) => {
 
     const payment = await Payment.create({
       userId: req.user.userId,
-      reservationId: reservation._id,
-      amount: reservation.amount,
+      bookingId: booking._id,
+      amount: booking.totalAmount,
       method: "upi",
       status: "customer_claimed",
       customerClaimedAt: new Date(),
     });
 
-    reservation.status = "ready";
-    await reservation.save();
+    booking.paymentStatus = "customer_claimed";
+    booking.status = "ready";
+
+    await booking.save();
 
     res.status(201).json({
       success: true,
-      message: "Payment claim submitted. Please show the QR code at the library.",
+      message:
+          "Payment claim submitted. Please show your booking QR code at the library.",
       payment,
-      reservation,
+      booking,
     });
   } catch (error) {
     res.status(500).json({
@@ -75,12 +81,14 @@ const claimPayment = async (req, res) => {
   }
 };
 
+
+// Get payment for one booking
 const getPayment = async (req, res) => {
   try {
     const payment = await Payment.findOne({
-      reservationId: req.params.reservationId,
+      bookingId: req.params.bookingId,
       userId: req.user.userId,
-    }).populate("reservationId");
+    });
 
     if (!payment) {
       return res.status(404).json({
@@ -100,6 +108,7 @@ const getPayment = async (req, res) => {
     });
   }
 };
+
 
 module.exports = {
   claimPayment,

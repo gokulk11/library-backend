@@ -1,5 +1,10 @@
 const Borrowing = require("../models/Borrowing");
 
+
+// ==========================================
+// GET ALL MY BORROWINGS
+// ==========================================
+
 const getMyBorrowings = async (req, res) => {
   try {
     const borrowings = await Borrowing.find({
@@ -7,52 +12,30 @@ const getMyBorrowings = async (req, res) => {
     })
       .populate(
         "bookId",
-        "title author category coverImage rentalPrice"
+        "title author coverImage category rentalPrice"
+      )
+      .populate(
+        "bookingId",
+        "totalAmount status paymentStatus"
       )
       .sort({ createdAt: -1 });
 
-    res.json({
-      success: true,
-      count: borrowings.length,
-      borrowings,
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
-};
-
-const getMyActiveBorrowings = async (req, res) => {
-  try {
-    const borrowings = await Borrowing.find({
-      userId: req.user.userId,
-      status: {
-        $in: ["borrowed", "overdue"],
-      },
-    })
-      .populate(
-        "bookId",
-        "title author category coverImage rentalPrice"
-      )
-      .sort({ dueDate: 1 });
-
-    // Calculate current status based on due date
     const now = new Date();
 
-    const updatedBorrowings = borrowings.map((borrowing) => {
-      const data = borrowing.toObject();
+    const updatedBorrowings = borrowings.map(
+      (borrowing) => {
+        const data = borrowing.toObject();
 
-      if (
-        borrowing.status === "borrowed" &&
-        borrowing.dueDate < now
-      ) {
-        data.status = "overdue";
+        if (
+          data.status === "borrowed" &&
+          new Date(data.dueDate) < now
+        ) {
+          data.status = "overdue";
+        }
+
+        return data;
       }
-
-      return data;
-    });
+    );
 
     res.json({
       success: true,
@@ -67,22 +50,59 @@ const getMyActiveBorrowings = async (req, res) => {
   }
 };
 
-const getMyBorrowingHistory = async (req, res) => {
+
+// ==========================================
+// GET ACTIVE BORROWINGS
+// ==========================================
+
+const getMyActiveBorrowings = async (
+  req,
+  res
+) => {
   try {
-    const borrowings = await Borrowing.find({
-      userId: req.user.userId,
-      status: "returned",
-    })
-      .populate(
-        "bookId",
-        "title author category coverImage rentalPrice"
-      )
-      .sort({ returnedAt: -1 });
+    const borrowings =
+      await Borrowing.find({
+        userId: req.user.userId,
+        status: "borrowed",
+      })
+        .populate(
+          "bookId",
+          "title author coverImage category rentalPrice"
+        )
+        .populate(
+          "bookingId",
+          "totalAmount status paymentStatus"
+        )
+        .sort({
+          dueDate: 1,
+        });
+
+    const now = new Date();
+
+    const updatedBorrowings =
+      borrowings.map(
+        (borrowing) => {
+          const data =
+            borrowing.toObject();
+
+          if (
+            new Date(data.dueDate) <
+            now
+          ) {
+            data.status =
+              "overdue";
+          }
+
+          return data;
+        }
+      );
 
     res.json({
       success: true,
-      count: borrowings.length,
-      borrowings,
+      count:
+        updatedBorrowings.length,
+      borrowings:
+        updatedBorrowings,
     });
   } catch (error) {
     res.status(500).json({
@@ -92,38 +112,92 @@ const getMyBorrowingHistory = async (req, res) => {
   }
 };
 
-const getMyBorrowing = async (req, res) => {
+
+// ==========================================
+// GET BORROWING HISTORY
+// ==========================================
+
+const getMyBorrowingHistory =
+  async (req, res) => {
+    try {
+      const borrowings =
+        await Borrowing.find({
+          userId:
+            req.user.userId,
+          status: "returned",
+        })
+          .populate(
+            "bookId",
+            "title author coverImage category rentalPrice"
+          )
+          .populate(
+            "bookingId",
+            "totalAmount status paymentStatus"
+          )
+          .sort({
+            returnedAt: -1,
+          });
+
+      res.json({
+        success: true,
+        count:
+          borrowings.length,
+        borrowings,
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error.message,
+      });
+    }
+  };
+
+
+// ==========================================
+// GET ONE BORROWING
+// ==========================================
+
+const getMyBorrowing = async (
+  req,
+  res
+) => {
   try {
-    const borrowing = await Borrowing.findOne({
-      _id: req.params.id,
-      userId: req.user.userId,
-    }).populate(
-      "bookId",
-      "title author category coverImage rentalPrice borrowingDays"
-    );
+    const borrowing =
+      await Borrowing.findOne({
+        _id: req.params.id,
+        userId: req.user.userId,
+      })
+        .populate(
+          "bookId",
+          "title author coverImage category rentalPrice description"
+        )
+        .populate(
+          "bookingId",
+          "totalAmount status paymentStatus"
+        );
 
     if (!borrowing) {
       return res.status(404).json({
         success: false,
-        message: "Borrowing record not found",
+        message:
+          "Borrowing record not found",
       });
     }
 
-    let status = borrowing.status;
+    const data =
+      borrowing.toObject();
 
     if (
-      borrowing.status === "borrowed" &&
-      borrowing.dueDate < new Date()
+      data.status === "borrowed" &&
+      new Date(data.dueDate) <
+        new Date()
     ) {
-      status = "overdue";
+      data.status = "overdue";
     }
 
     res.json({
       success: true,
-      borrowing: {
-        ...borrowing.toObject(),
-        status,
-      },
+      borrowing: data,
     });
   } catch (error) {
     res.status(500).json({
@@ -132,6 +206,7 @@ const getMyBorrowing = async (req, res) => {
     });
   }
 };
+
 
 module.exports = {
   getMyBorrowings,

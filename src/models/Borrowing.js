@@ -14,9 +14,9 @@ const borrowingSchema = new mongoose.Schema(
       required: true,
     },
 
-    reservationId: {
+    bookingId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Reservation",
+      ref: "Booking",
       required: true,
     },
 

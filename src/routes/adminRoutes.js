@@ -14,6 +14,10 @@ const {
 } = require("../controllers/adminController");
 
 const {
+  expireBookings,
+} = require("../controllers/bookingController");
+
+const {
   expireReservations,
 } = require("../controllers/reservationController");
 
@@ -101,6 +105,14 @@ router.post(
   protect,
   authorize("admin"),
   expireReservations
+);
+
+
+router.post(
+  "/bookings/expire",
+  protect,
+  authorize("admin"),
+  expireBookings
 );
 
 module.exports = router;

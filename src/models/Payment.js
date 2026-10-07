@@ -8,15 +8,17 @@ const paymentSchema = new mongoose.Schema(
       required: true,
     },
 
-    reservationId: {
+    bookingId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Reservation",
+      ref: "Booking",
       required: true,
+      unique: true,
     },
 
     amount: {
       type: Number,
       required: true,
+      min: 0,
     },
 
     method: {
@@ -57,4 +59,7 @@ const paymentSchema = new mongoose.Schema(
   }
 );
 
-module.exports = mongoose.model("Payment", paymentSchema);
+module.exports = mongoose.model(
+  "Payment",
+  paymentSchema
+);

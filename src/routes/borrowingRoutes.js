@@ -7,11 +7,17 @@ const {
   getMyBorrowing,
 } = require("../controllers/borrowingController");
 
-const { protect } = require("../middleware/authMiddleware");
+const {
+  protect,
+} = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
-router.get("/my", protect, getMyBorrowings);
+router.get(
+  "/my",
+  protect,
+  getMyBorrowings
+);
 
 router.get(
   "/my/active",
