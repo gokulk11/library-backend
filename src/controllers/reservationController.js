@@ -1,48 +1,60 @@
+const mongoose = require("mongoose");
 const Reservation = require("../models/Reservation");
 const Book = require("../models/Book");
 
 // Create reservation
 const createReservation = async (req, res) => {
+  const session = await mongoose.startSession();
+
   try {
-    const { bookId } = req.body;
+    let reservation;
 
-    if (!bookId) {
-      return res.status(400).json({
-        success: false,
-        message: "Book ID is required",
-      });
-    }
+    await session.withTransaction(async () => {
+      const { bookId } = req.body;
 
-    // Atomically reserve one available copy
-    const book = await Book.findOneAndUpdate(
-      {
-        _id: bookId,
-        availableCopies: { $gt: 0 },
-      },
-      {
-        $inc: { availableCopies: -1 },
-      },
-      {
-        new: true,
+      if (!bookId) {
+        throw new Error("Book ID is required");
       }
-    );
 
-    if (!book) {
-      return res.status(400).json({
-        success: false,
-        message: "Book is not available",
-      });
-    }
+      const book = await Book.findOneAndUpdate(
+        {
+          _id: bookId,
+          availableCopies: { $gt: 0 },
+        },
+        {
+          $inc: {
+            availableCopies: -1,
+          },
+        },
+        {
+          new: true,
+          session,
+        }
+      );
 
-    // 24 hour reservation
-    const expiresAt = new Date();
-    expiresAt.setHours(expiresAt.getHours() + 24);
+      if (!book) {
+        throw new Error("Book is not available");
+      }
 
-    const reservation = await Reservation.create({
-      userId: req.user.userId,
-      bookId: book._id,
-      amount: book.rentalPrice,
-      expiresAt,
+      const expiresAt = new Date();
+
+      expiresAt.setHours(
+        expiresAt.getHours() + 24
+      );
+
+      const created = await Reservation.create(
+        [
+          {
+            userId: req.user.userId,
+            bookId: book._id,
+            amount: book.rentalPrice,
+            expiresAt,
+          },
+        ],
+        { session }
+      );
+
+      reservation = created[0];
     });
 
     res.status(201).json({
@@ -55,6 +67,8 @@ const createReservation = async (req, res) => {
       success: false,
       message: error.message,
     });
+  } finally {
+    await session.endSession();
   }
 };
 
@@ -153,9 +167,57 @@ const cancelReservation = async (req, res) => {
   }
 };
 
+
+const expireReservations = async (req, res) => {
+  try {
+    const now = new Date();
+
+    const expiredReservations =
+      await Reservation.find({
+        expiresAt: { $lt: now },
+        status: {
+          $in: ["pending", "ready"],
+        },
+      });
+
+    let expiredCount = 0;
+
+    for (const reservation of expiredReservations) {
+      // Mark reservation as expired
+      reservation.status = "expired";
+
+      await reservation.save();
+
+      // Release the reserved book copy
+      await Book.findByIdAndUpdate(
+        reservation.bookId,
+        {
+          $inc: {
+            availableCopies: 1,
+          },
+        }
+      );
+
+      expiredCount++;
+    }
+
+    res.json({
+      success: true,
+      message: "Expired reservations processed",
+      expiredCount,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 module.exports = {
   createReservation,
   getMyReservations,
   getReservation,
+  expireReservations,
   cancelReservation,
 };

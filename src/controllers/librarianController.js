@@ -1,4 +1,8 @@
+const mongoose = require("mongoose");
 const Reservation = require("../models/Reservation");
+const Payment = require("../models/Payment");
+const Borrowing = require("../models/Borrowing");
+const Book = require("../models/Book");
 
 const scanReservation = async (req, res) => {
   try {
@@ -64,128 +68,132 @@ const scanReservation = async (req, res) => {
   }
 };
 
-const Payment = require("../models/Payment");
-const Borrowing = require("../models/Borrowing");
-const Book = require("../models/Book");
 
 const verifyPayment = async (req, res) => {
+  const session = await mongoose.startSession();
+
   try {
-    const { reservationId } = req.body;
+    let result;
 
-    if (!reservationId) {
-      return res.status(400).json({
-        success: false,
-        message: "Reservation ID is required",
-      });
-    }
+    await session.withTransaction(async () => {
+      const { reservationId } = req.body;
 
-    const reservation = await Reservation.findById(reservationId);
+      if (!reservationId) {
+        throw new Error("Reservation ID is required");
+      }
 
-    if (!reservation) {
-      return res.status(404).json({
-        success: false,
-        message: "Reservation not found",
-      });
-    }
+      const reservation = await Reservation.findById(
+        reservationId
+      ).session(session);
 
-    if (reservation.expiresAt < new Date()) {
-      return res.status(400).json({
-        success: false,
-        message: "Reservation has expired",
-      });
-    }
+      if (!reservation) {
+        throw new Error("Reservation not found");
+      }
 
-    if (reservation.status !== "ready") {
-      return res.status(400).json({
-        success: false,
-        message: "Reservation is not ready for pickup",
-      });
-    }
+      if (reservation.expiresAt < new Date()) {
+        throw new Error("Reservation has expired");
+      }
 
-    // Find payment
-    const payment = await Payment.findOne({
-      reservationId: reservation._id,
-      userId: reservation.userId,
+      if (reservation.status !== "ready") {
+        throw new Error(
+          "Reservation is not ready for pickup"
+        );
+      }
+
+      const payment = await Payment.findOne({
+        reservationId: reservation._id,
+        userId: reservation.userId,
+      }).session(session);
+
+      if (!payment) {
+        throw new Error("Payment record not found");
+      }
+
+      if (payment.status !== "customer_claimed") {
+        throw new Error(
+          `Payment cannot be verified. Current status: ${payment.status}`
+        );
+      }
+
+      const book = await Book.findById(
+        reservation.bookId
+      ).session(session);
+
+      if (!book) {
+        throw new Error("Book not found");
+      }
+
+      // Create borrowing
+      const borrowedAt = new Date();
+
+      const dueDate = new Date(borrowedAt);
+
+      dueDate.setDate(
+        dueDate.getDate() + book.borrowingDays
+      );
+
+      const createdBorrowings =
+        await Borrowing.create(
+          [
+            {
+              userId: reservation.userId,
+              bookId: reservation.bookId,
+              reservationId: reservation._id,
+              borrowedAt,
+              dueDate,
+              status: "borrowed",
+            },
+          ],
+          { session }
+        );
+
+      const borrowing = createdBorrowings[0];
+
+      // Verify payment
+      payment.status = "verified";
+      payment.verifiedAt = new Date();
+      payment.verifiedBy = req.user.userId;
+
+      await payment.save({ session });
+
+      // Update reservation
+      reservation.status = "picked_up";
+      reservation.paymentStatus = "paid";
+
+      await reservation.save({ session });
+
+      result = {
+        payment,
+        borrowing,
+      };
     });
-
-    if (!payment) {
-      return res.status(404).json({
-        success: false,
-        message: "Payment record not found",
-      });
-    }
-
-    if (payment.status !== "customer_claimed") {
-      return res.status(400).json({
-        success: false,
-        message: `Payment cannot be verified. Current status: ${payment.status}`,
-      });
-    }
-
-    // Get book
-    const book = await Book.findById(reservation.bookId);
-
-    if (!book) {
-      return res.status(404).json({
-        success: false,
-        message: "Book not found",
-      });
-    }
-
-    // Create borrowing
-    const borrowedAt = new Date();
-
-    const dueDate = new Date(borrowedAt);
-
-    dueDate.setDate(
-      dueDate.getDate() + book.borrowingDays
-    );
-
-    const borrowing = await Borrowing.create({
-      userId: reservation.userId,
-      bookId: reservation.bookId,
-      reservationId: reservation._id,
-      borrowedAt,
-      dueDate,
-      status: "borrowed",
-    });
-
-    // Verify payment
-    payment.status = "verified";
-    payment.verifiedAt = new Date();
-    payment.verifiedBy = req.user.userId;
-
-    await payment.save();
-
-    // Update reservation
-    reservation.status = "picked_up";
-    reservation.paymentStatus = "paid";
-
-    await reservation.save();
 
     res.json({
       success: true,
-      message: "Payment verified and book issued successfully",
+      message:
+        "Payment verified and book issued successfully",
 
       payment: {
-        id: payment._id,
-        amount: payment.amount,
-        status: payment.status,
-        verifiedAt: payment.verifiedAt,
+        id: result.payment._id,
+        amount: result.payment.amount,
+        status: result.payment.status,
+        verifiedAt: result.payment.verifiedAt,
       },
 
       borrowing: {
-        id: borrowing._id,
-        borrowedAt: borrowing.borrowedAt,
-        dueDate: borrowing.dueDate,
-        status: borrowing.status,
+        id: result.borrowing._id,
+        borrowedAt: result.borrowing.borrowedAt,
+        dueDate: result.borrowing.dueDate,
+        status: result.borrowing.status,
       },
     });
   } catch (error) {
-    res.status(500).json({
+    res.status(400).json({
       success: false,
       message: error.message,
     });
+  } finally {
+    await session.endSession();
   }
 };
 

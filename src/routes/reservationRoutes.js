@@ -7,7 +7,10 @@ const {
   cancelReservation,
 } = require("../controllers/reservationController");
 
-const { protect } = require("../middleware/authMiddleware");
+const {
+  protect,
+  authorize,
+} = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
@@ -18,5 +21,8 @@ router.get("/my", protect, getMyReservations);
 router.get("/:id", protect, getReservation);
 
 router.patch("/:id/cancel", protect, cancelReservation);
+
+
+
 
 module.exports = router;

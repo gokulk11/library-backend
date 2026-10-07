@@ -14,6 +14,10 @@ const {
 } = require("../controllers/adminController");
 
 const {
+  expireReservations,
+} = require("../controllers/reservationController");
+
+const {
   protect,
   authorize,
 } = require("../middleware/authMiddleware");
@@ -90,6 +94,13 @@ router.get(
   protect,
   authorize("admin"),
   getOverdueBorrowings
+);
+
+router.post(
+  "/reservations/expire",
+  protect,
+  authorize("admin"),
+  expireReservations
 );
 
 module.exports = router;
