@@ -1,13 +1,24 @@
+
 const mongoose = require("mongoose");
 
 const bookSchema = new mongoose.Schema(
   {
+    // Book title in Malayalam or English
     title: {
       type: String,
       required: true,
       trim: true,
     },
 
+    // English transliteration for Malayalam titles.
+    // For English books, use the same value as title.
+    titleEnglish: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    // Keep all other fields in English
     author: {
       type: String,
       required: true,
@@ -57,7 +68,7 @@ const bookSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: 1,
-      default: 7,
+      default: 15,
     },
   },
   {
