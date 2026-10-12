@@ -416,9 +416,51 @@ const returnBook = async (req, res) => {
   }
 };
 
+const getBorrowingDetails = async (req, res) => {
+  try {
+    const borrowing = await Borrowing.findById(
+      req.params.id
+    )
+      .populate(
+        "userId",
+        "name email phone"
+      )
+      .populate(
+        "bookId",
+        "title author coverImage category rentalPrice"
+      );
+
+    if (!borrowing) {
+      return res.status(404).json({
+        success: false,
+        message: "Borrowing record not found",
+      });
+    }
+
+    const data = borrowing.toObject();
+
+    if (
+      data.status === "borrowed" &&
+      new Date(data.dueDate) < new Date()
+    ) {
+      data.status = "overdue";
+    }
+
+    res.json({
+      success: true,
+      borrowing: data,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
 
 module.exports = {
   scanBooking,
   verifyBookingPayment,
   returnBook,
+  getBorrowingDetails,
 };

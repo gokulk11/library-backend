@@ -4,6 +4,7 @@ const {
   scanBooking,
   verifyBookingPayment,
   returnBook,
+  getBorrowingDetails,
 } = require("../controllers/librarianController");
 
 const {
@@ -32,6 +33,13 @@ router.post(
   protect,
   authorize("librarian", "admin"),
   returnBook
+);
+
+router.get(
+  "/borrowings/:id",
+  protect,
+  authorize("librarian", "admin"),
+  getBorrowingDetails
 );
 
 module.exports = router;

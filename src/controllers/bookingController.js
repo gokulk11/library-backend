@@ -102,8 +102,40 @@ const createBooking = async (req, res) => {
 
 
 // Get customer's bookings
+
 const getMyBookings = async (req, res) => {
+  const session = await mongoose.startSession();
+
   try {
+    // Process expired bookings before fetching the list.
+    await session.withTransaction(async () => {
+      const now = new Date();
+
+      const expiredBookings = await Booking.find({
+        expiresAt: { $lte: now },
+        status: { $in: ["pending", "ready"] },
+      }).session(session);
+
+      for (const booking of expiredBookings) {
+        // Mark expired inside the transaction.
+        booking.status = "expired";
+
+        await booking.save({ session });
+
+        // Restore the reserved inventory.
+        for (const item of booking.items) {
+          await Book.findByIdAndUpdate(
+            item.bookId,
+            {
+              $inc: { availableCopies: 1 },
+            },
+            { session }
+          );
+        }
+      }
+    });
+
+    // Fetch bookings after expiration processing completes.
     const bookings = await Booking.find({
       userId: req.user.userId,
     })
@@ -122,8 +154,11 @@ const getMyBookings = async (req, res) => {
       success: false,
       message: error.message,
     });
+  } finally {
+    await session.endSession();
   }
 };
+
 
 
 // Get one booking
