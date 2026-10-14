@@ -1,20 +1,18 @@
+
 const User = require("../models/User");
 const Book = require("../models/Book");
+const Booking = require("../models/Booking");
 const Borrowing = require("../models/Borrowing");
 const Payment = require("../models/Payment");
-const Reservation = require("../models/Reservation");
 const bcrypt = require("bcryptjs");
 
-
+// ==========================================
+// CREATE LIBRARIAN
+// ==========================================
 
 const createLibrarian = async (req, res) => {
   try {
-    const {
-      name,
-      email,
-      phone,
-      password,
-    } = req.body;
+    const { name, email, phone, password } = req.body;
 
     if (!name || !email || !phone || !password) {
       return res.status(400).json({
@@ -23,8 +21,14 @@ const createLibrarian = async (req, res) => {
       });
     }
 
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedPhone = phone.trim();
+
     const existingUser = await User.findOne({
-      $or: [{ email }, { phone }],
+      $or: [
+        { email: normalizedEmail },
+        { phone: normalizedPhone },
+      ],
     });
 
     if (existingUser) {
@@ -34,21 +38,18 @@ const createLibrarian = async (req, res) => {
       });
     }
 
-    const hashedPassword = await bcrypt.hash(
-      password,
-      10
-    );
+    const hashedPassword = await bcrypt.hash(password, 10);
 
     const librarian = await User.create({
-      name,
-      email,
-      phone,
+      name: name.trim(),
+      email: normalizedEmail,
+      phone: normalizedPhone,
       password: hashedPassword,
       role: "librarian",
       isActive: true,
     });
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: "Librarian created successfully",
       librarian: {
@@ -61,12 +62,18 @@ const createLibrarian = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("Create librarian error:", error);
+
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message: "Failed to create librarian",
     });
   }
 };
+
+// ==========================================
+// GET ALL LIBRARIANS
+// ==========================================
 
 const getLibrarians = async (req, res) => {
   try {
@@ -76,27 +83,33 @@ const getLibrarians = async (req, res) => {
       .select("-password")
       .sort({ createdAt: -1 });
 
-    res.json({
+    return res.json({
       success: true,
       count: librarians.length,
       librarians,
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("Get librarians error:", error);
+
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message: "Failed to fetch librarians",
     });
   }
 };
+
+// ==========================================
+// UPDATE LIBRARIAN STATUS
+// ==========================================
 
 const updateLibrarianStatus = async (req, res) => {
   try {
     const { isActive } = req.body;
 
-    if (isActive === undefined) {
+    if (typeof isActive !== "boolean") {
       return res.status(400).json({
         success: false,
-        message: "isActive is required",
+        message: "isActive must be true or false",
       });
     }
 
@@ -112,11 +125,17 @@ const updateLibrarianStatus = async (req, res) => {
       });
     }
 
-    librarian.isActive = isActive;
+    if (librarian._id.toString() === req.user.userId.toString()) {
+      return res.status(400).json({
+        success: false,
+        message: "You cannot change your own status",
+      });
+    }
 
+    librarian.isActive = isActive;
     await librarian.save();
 
-    res.json({
+    return res.json({
       success: true,
       message: "Librarian status updated successfully",
       librarian: {
@@ -129,15 +148,23 @@ const updateLibrarianStatus = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("Update librarian status error:", error);
+
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message: "Failed to update librarian status",
     });
   }
 };
 
+// ==========================================
+// ADMIN DASHBOARD
+// ==========================================
+
 const getDashboard = async (req, res) => {
   try {
+    const now = new Date();
+
     const [
       totalUsers,
       totalLibrarians,
@@ -145,7 +172,7 @@ const getDashboard = async (req, res) => {
       totalBorrowings,
       activeBorrowings,
       overdueBorrowings,
-      totalReservations,
+      totalBookings,
       verifiedPayments,
     ] = await Promise.all([
       User.countDocuments({ role: "user" }),
@@ -158,20 +185,22 @@ const getDashboard = async (req, res) => {
 
       Borrowing.countDocuments({
         status: "borrowed",
+        dueDate: { $gte: now },
       }),
 
       Borrowing.countDocuments({
-        status: "overdue",
+        status: "borrowed",
+        dueDate: { $lt: now },
       }),
 
-      Reservation.countDocuments(),
+      Booking.countDocuments(),
 
       Payment.countDocuments({
         status: "verified",
       }),
     ]);
 
-    res.json({
+    return res.json({
       success: true,
       dashboard: {
         totalUsers,
@@ -180,17 +209,23 @@ const getDashboard = async (req, res) => {
         totalBorrowings,
         activeBorrowings,
         overdueBorrowings,
-        totalReservations,
+        totalBookings,
         verifiedPayments,
       },
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("Get dashboard error:", error);
+
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message: "Failed to fetch dashboard statistics",
     });
   }
 };
+
+// ==========================================
+// GET ALL USERS
+// ==========================================
 
 const getUsers = async (req, res) => {
   try {
@@ -201,79 +236,94 @@ const getUsers = async (req, res) => {
       limit = 20,
     } = req.query;
 
+    const pageNumber = Number(page);
+    const pageSize = Number(limit);
+
+    if (
+      !Number.isInteger(pageNumber) ||
+      pageNumber < 1 ||
+      !Number.isInteger(pageSize) ||
+      pageSize < 1 ||
+      pageSize > 100
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid pagination parameters",
+      });
+    }
+
     const filter = {};
 
     if (role) {
+      if (!["user", "librarian", "admin"].includes(role)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid user role",
+        });
+      }
+
       filter.role = role;
     }
 
-    if (search) {
+    if (search && search.trim()) {
+      // Escape regex special characters in user input.
+      const escapedSearch = search
+        .trim()
+        .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
       filter.$or = [
-        {
-          name: {
-            $regex: search,
-            $options: "i",
-          },
-        },
-        {
-          email: {
-            $regex: search,
-            $options: "i",
-          },
-        },
-        {
-          phone: {
-            $regex: search,
-            $options: "i",
-          },
-        },
+        { name: { $regex: escapedSearch, $options: "i" } },
+        { email: { $regex: escapedSearch, $options: "i" } },
+        { phone: { $regex: escapedSearch, $options: "i" } },
       ];
     }
 
-    const skip =
-      (Number(page) - 1) * Number(limit);
+    const skip = (pageNumber - 1) * pageSize;
 
-    const users = await User.find(filter)
-      .select("-password")
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(Number(limit));
+    const [users, totalUsers] = await Promise.all([
+      User.find(filter)
+        .select("-password")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(pageSize),
 
-    const totalUsers =
-      await User.countDocuments(filter);
+      User.countDocuments(filter),
+    ]);
 
-    res.json({
+    return res.json({
       success: true,
       count: users.length,
       totalUsers,
-      currentPage: Number(page),
-      totalPages: Math.ceil(
-        totalUsers / Number(limit)
-      ),
+      currentPage: pageNumber,
+      totalPages: Math.ceil(totalUsers / pageSize),
       users,
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("Get users error:", error);
+
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message: "Failed to fetch users",
     });
   }
 };
+
+// ==========================================
+// UPDATE USER STATUS
+// ==========================================
 
 const updateUserStatus = async (req, res) => {
   try {
     const { isActive } = req.body;
 
-    if (isActive === undefined) {
+    if (typeof isActive !== "boolean") {
       return res.status(400).json({
         success: false,
-        message: "isActive is required",
+        message: "isActive must be true or false",
       });
     }
 
-    const user = await User.findById(
-      req.params.id
-    );
+    const user = await User.findById(req.params.id);
 
     if (!user) {
       return res.status(404).json({
@@ -282,11 +332,7 @@ const updateUserStatus = async (req, res) => {
       });
     }
 
-    // Prevent admin from accidentally disabling themselves
-    if (
-      user._id.toString() ===
-      req.user.userId.toString()
-    ) {
+    if (user._id.toString() === req.user.userId.toString()) {
       return res.status(400).json({
         success: false,
         message: "You cannot change your own status",
@@ -294,10 +340,9 @@ const updateUserStatus = async (req, res) => {
     }
 
     user.isActive = isActive;
-
     await user.save();
 
-    res.json({
+    return res.json({
       success: true,
       message: "User status updated successfully",
       user: {
@@ -309,59 +354,141 @@ const updateUserStatus = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("Update user status error:", error);
+
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message: "Failed to update user status",
     });
   }
 };
 
+// ==========================================
+// GET ALL BOOKINGS
+// ==========================================
 
-
-const getReservations = async (req, res) => {
+const getBookings = async (req, res) => {
   try {
     const {
       status,
+      paymentStatus,
+      search,
       page = 1,
       limit = 20,
     } = req.query;
 
+    const pageNumber = Number(page);
+    const pageSize = Number(limit);
+
+    if (
+      !Number.isInteger(pageNumber) ||
+      pageNumber < 1 ||
+      !Number.isInteger(pageSize) ||
+      pageSize < 1 ||
+      pageSize > 100
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid pagination parameters",
+      });
+    }
+
     const filter = {};
 
     if (status) {
+      const allowedStatuses = [
+        "pending",
+        "ready",
+        "picked_up",
+        "cancelled",
+        "expired",
+      ];
+
+      if (!allowedStatuses.includes(status)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid booking status",
+        });
+      }
+
       filter.status = status;
     }
 
-    const skip =
-      (Number(page) - 1) * Number(limit);
+    if (paymentStatus) {
+      const allowedPaymentStatuses = [
+        "not_paid",
+        "customer_claimed",
+        "verified",
+        "rejected",
+      ];
 
-    const reservations = await Reservation.find(filter)
-      .populate("userId", "name email phone")
-      .populate("bookId", "title author category")
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(Number(limit));
+      if (!allowedPaymentStatuses.includes(paymentStatus)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid payment status",
+        });
+      }
 
-    const total =
-      await Reservation.countDocuments(filter);
+      filter.paymentStatus = paymentStatus;
+    }
 
-    res.json({
+    const skip = (pageNumber - 1) * pageSize;
+
+    const [bookings, total] = await Promise.all([
+      Booking.find(filter)
+        .populate("userId", "name email phone")
+        .populate(
+          "items.bookId",
+          "title titleEnglish author category coverImage"
+        )
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(pageSize),
+
+      Booking.countDocuments(filter),
+    ]);
+
+    let result = bookings;
+
+    // Search currently applies to the fetched page after population.
+    if (search && search.trim()) {
+      const searchText = search.trim().toLowerCase();
+
+      result = bookings.filter((booking) => {
+        const customer = booking.userId;
+
+        return (
+          customer &&
+          (
+            customer.name?.toLowerCase().includes(searchText) ||
+            customer.email?.toLowerCase().includes(searchText) ||
+            customer.phone?.includes(searchText)
+          )
+        );
+      });
+    }
+
+    return res.json({
       success: true,
-      count: reservations.length,
+      count: result.length,
       total,
-      currentPage: Number(page),
-      totalPages: Math.ceil(
-        total / Number(limit)
-      ),
-      reservations,
+      currentPage: pageNumber,
+      totalPages: Math.ceil(total / pageSize),
+      bookings: result,
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("Get bookings error:", error);
+
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message: "Failed to fetch bookings",
     });
   }
 };
+
+// ==========================================
+// GET ALL BORROWINGS
+// ==========================================
 
 const getBorrowings = async (req, res) => {
   try {
@@ -371,49 +498,89 @@ const getBorrowings = async (req, res) => {
       limit = 20,
     } = req.query;
 
+    const pageNumber = Number(page);
+    const pageSize = Number(limit);
+
+    if (
+      !Number.isInteger(pageNumber) ||
+      pageNumber < 1 ||
+      !Number.isInteger(pageSize) ||
+      pageSize < 1 ||
+      pageSize > 100
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid pagination parameters",
+      });
+    }
+
     const filter = {};
 
     if (status) {
+      if (!["borrowed", "returned", "overdue"].includes(status)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid borrowing status",
+        });
+      }
+
       filter.status = status;
     }
 
-    const skip =
-      (Number(page) - 1) * Number(limit);
+    const skip = (pageNumber - 1) * pageSize;
 
-    const borrowings = await Borrowing.find(filter)
-      .populate("userId", "name email phone")
-      .populate(
-        "bookId",
-        "title author category"
-      )
-      .populate(
-        "reservationId",
-        "amount status"
-      )
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(Number(limit));
+    const [borrowings, total] = await Promise.all([
+      Borrowing.find(filter)
+        .populate("userId", "name email phone")
+        .populate(
+          "bookId",
+          "title titleEnglish author category coverImage"
+        )
+        .populate("bookingId", "totalAmount status paymentStatus")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(pageSize),
 
-    const total =
-      await Borrowing.countDocuments(filter);
+      Borrowing.countDocuments(filter),
+    ]);
 
-    res.json({
+    // Derive overdue status for records still stored as borrowed.
+    const now = new Date();
+
+    const result = borrowings.map((borrowing) => {
+      const data = borrowing.toObject();
+
+      if (
+        data.status === "borrowed" &&
+        new Date(data.dueDate) < now
+      ) {
+        data.status = "overdue";
+      }
+
+      return data;
+    });
+
+    return res.json({
       success: true,
-      count: borrowings.length,
+      count: result.length,
       total,
-      currentPage: Number(page),
-      totalPages: Math.ceil(
-        total / Number(limit)
-      ),
-      borrowings,
+      currentPage: pageNumber,
+      totalPages: Math.ceil(total / pageSize),
+      borrowings: result,
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("Get borrowings error:", error);
+
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message: "Failed to fetch borrowings",
     });
   }
 };
+
+// ==========================================
+// GET ALL PAYMENTS
+// ==========================================
 
 const getPayments = async (req, res) => {
   try {
@@ -423,49 +590,195 @@ const getPayments = async (req, res) => {
       limit = 20,
     } = req.query;
 
+    const pageNumber = Number(page);
+    const pageSize = Number(limit);
+
+    if (
+      !Number.isInteger(pageNumber) ||
+      pageNumber < 1 ||
+      !Number.isInteger(pageSize) ||
+      pageSize < 1 ||
+      pageSize > 100
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid pagination parameters",
+      });
+    }
+
     const filter = {};
 
     if (status) {
+      const allowedStatuses = [
+        "not_paid",
+        "customer_claimed",
+        "verified",
+        "rejected",
+      ];
+
+      if (!allowedStatuses.includes(status)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid payment status",
+        });
+      }
+
       filter.status = status;
     }
 
-    const skip =
-      (Number(page) - 1) * Number(limit);
+    const skip = (pageNumber - 1) * pageSize;
 
-    const payments = await Payment.find(filter)
-      .populate("userId", "name email phone")
-      .populate(
-        "reservationId",
-        "bookId amount status"
-      )
-      .populate(
-        "verifiedBy",
-        "name email"
-      )
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(Number(limit));
+    const [payments, total] = await Promise.all([
+      Payment.find(filter)
+        .populate("userId", "name email phone")
+        .populate(
+          "bookingId",
+          "items totalAmount status paymentStatus"
+        )
+        .populate("verifiedBy", "name email")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(pageSize),
 
-    const total =
-      await Payment.countDocuments(filter);
+      Payment.countDocuments(filter),
+    ]);
 
-    res.json({
+    return res.json({
       success: true,
       count: payments.length,
       total,
-      currentPage: Number(page),
-      totalPages: Math.ceil(
-        total / Number(limit)
-      ),
+      currentPage: pageNumber,
+      totalPages: Math.ceil(total / pageSize),
       payments,
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("Get payments error:", error);
+
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message: "Failed to fetch payments",
     });
   }
 };
+
+// ==========================================
+// FINANCE SUMMARY
+// Calculates totals across ALL payment records.
+// ==========================================
+
+const getFinanceSummary = async (req, res) => {
+  try {
+    const result = await Payment.aggregate([
+      {
+        $group: {
+          _id: null,
+
+          totalPayments: {
+            $sum: 1,
+          },
+
+          verifiedCount: {
+            $sum: {
+              $cond: [
+                { $eq: ["$status", "verified"] },
+                1,
+                0,
+              ],
+            },
+          },
+
+          pendingCount: {
+            $sum: {
+              $cond: [
+                { $eq: ["$status", "customer_claimed"] },
+                1,
+                0,
+              ],
+            },
+          },
+
+          notPaidCount: {
+            $sum: {
+              $cond: [
+                { $eq: ["$status", "not_paid"] },
+                1,
+                0,
+              ],
+            },
+          },
+
+          rejectedCount: {
+            $sum: {
+              $cond: [
+                { $eq: ["$status", "rejected"] },
+                1,
+                0,
+              ],
+            },
+          },
+
+          totalCollected: {
+            $sum: {
+              $cond: [
+                { $eq: ["$status", "verified"] },
+                "$amount",
+                0,
+              ],
+            },
+          },
+
+          pendingAmount: {
+            $sum: {
+              $cond: [
+                { $eq: ["$status", "customer_claimed"] },
+                "$amount",
+                0,
+              ],
+            },
+          },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          totalPayments: 1,
+          verifiedCount: 1,
+          pendingCount: 1,
+          notPaidCount: 1,
+          rejectedCount: 1,
+          totalCollected: 1,
+          pendingAmount: 1,
+        },
+      },
+    ]);
+
+    const summary = result[0] || {
+      totalPayments: 0,
+      verifiedCount: 0,
+      pendingCount: 0,
+      notPaidCount: 0,
+      rejectedCount: 0,
+      totalCollected: 0,
+      pendingAmount: 0,
+    };
+
+    return res.json({
+      success: true,
+      summary,
+    });
+  } catch (error) {
+    console.error("Get finance summary error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch finance summary",
+    });
+  }
+};
+
+// ==========================================
+// GET OVERDUE BORROWINGS
+// ==========================================
 
 const getOverdueBorrowings = async (req, res) => {
   try {
@@ -478,23 +791,33 @@ const getOverdueBorrowings = async (req, res) => {
       .populate("userId", "name email phone")
       .populate(
         "bookId",
-        "title author category"
+        "title titleEnglish author category coverImage"
       )
+      .populate("bookingId", "totalAmount status paymentStatus")
       .sort({ dueDate: 1 });
 
-    res.json({
+    return res.json({
       success: true,
       count: borrowings.length,
-      borrowings,
+      borrowings: borrowings.map((borrowing) => {
+        const data = borrowing.toObject();
+        data.status = "overdue";
+        return data;
+      }),
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("Get overdue borrowings error:", error);
+
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message: "Failed to fetch overdue borrowings",
     });
   }
 };
 
+// ==========================================
+// EXPORT CONTROLLERS
+// ==========================================
 
 module.exports = {
   getDashboard,
@@ -503,8 +826,9 @@ module.exports = {
   createLibrarian,
   getLibrarians,
   updateLibrarianStatus,
-  getReservations,
+  getBookings,
   getBorrowings,
   getPayments,
+  getFinanceSummary,
   getOverdueBorrowings,
 };

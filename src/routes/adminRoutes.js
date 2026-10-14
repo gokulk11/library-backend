@@ -1,3 +1,4 @@
+
 const express = require("express");
 
 const {
@@ -7,19 +8,16 @@ const {
   createLibrarian,
   getLibrarians,
   updateLibrarianStatus,
-  getReservations,
+  getBookings,
   getBorrowings,
   getPayments,
   getOverdueBorrowings,
+  getFinanceSummary,
 } = require("../controllers/adminController");
 
 const {
   expireBookings,
 } = require("../controllers/bookingController");
-
-const {
-  expireReservations,
-} = require("../controllers/reservationController");
 
 const {
   protect,
@@ -28,12 +26,20 @@ const {
 
 const router = express.Router();
 
+// ==========================================
+// ADMIN DASHBOARD
+// ==========================================
+
 router.get(
   "/dashboard",
   protect,
   authorize("admin"),
   getDashboard
 );
+
+// ==========================================
+// USER MANAGEMENT
+// ==========================================
 
 router.get(
   "/users",
@@ -49,6 +55,9 @@ router.patch(
   updateUserStatus
 );
 
+// ==========================================
+// LIBRARIAN MANAGEMENT
+// ==========================================
 
 router.post(
   "/librarians",
@@ -71,13 +80,20 @@ router.patch(
   updateLibrarianStatus
 );
 
+// ==========================================
+// BOOKING MANAGEMENT
+// ==========================================
 
 router.get(
-  "/reservations",
+  "/bookings",
   protect,
   authorize("admin"),
-  getReservations
+  getBookings
 );
+
+// ==========================================
+// BORROWING MANAGEMENT
+// ==========================================
 
 router.get(
   "/borrowings",
@@ -87,32 +103,39 @@ router.get(
 );
 
 router.get(
-  "/payments",
-  protect,
-  authorize("admin"),
-  getPayments
-);
-
-router.get(
   "/borrowings/overdue",
   protect,
   authorize("admin"),
   getOverdueBorrowings
 );
 
-router.post(
-  "/reservations/expire",
+// ==========================================
+// PAYMENT MANAGEMENT
+// ==========================================
+
+router.get(
+  "/payments",
   protect,
   authorize("admin"),
-  expireReservations
+  getPayments
 );
 
+// ==========================================
+// BOOKING EXPIRY
+// ==========================================
 
 router.post(
   "/bookings/expire",
   protect,
   authorize("admin"),
   expireBookings
+);
+
+router.get(
+  "/finance/summary",
+  protect,
+  authorize("admin"),
+  getFinanceSummary
 );
 
 module.exports = router;

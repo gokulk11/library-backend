@@ -6,7 +6,6 @@ const connectDB = require("./src/config/db");
 const authRoutes = require("./src/routes/authRoutes");
 const bookRoutes = require("./src/routes/bookRoutes");
 const paymentRoutes = require("./src/routes/paymentRoutes");
-const reservationRoutes = require("./src/routes/reservationRoutes");
 const librarianRoutes = require("./src/routes/librarianRoutes");
 const borrowingRoutes = require("./src/routes/borrowingRoutes");
 const adminRoutes = require("./src/routes/adminRoutes");
@@ -38,7 +37,6 @@ app.get("/", (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/books", bookRoutes);
 app.use("/api/payments", paymentRoutes);
-app.use("/api/reservations", reservationRoutes);
 app.use("/api/librarian", librarianRoutes);
 app.use("/api/borrowings", borrowingRoutes);
 app.use("/api/admin", adminRoutes);
