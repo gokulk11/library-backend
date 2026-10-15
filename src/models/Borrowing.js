@@ -1,3 +1,4 @@
+
 const mongoose = require("mongoose");
 
 const borrowingSchema = new mongoose.Schema(
@@ -39,6 +40,22 @@ const borrowingSchema = new mongoose.Schema(
       type: String,
       enum: ["borrowed", "returned", "overdue"],
       default: "borrowed",
+    },
+
+    fineAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    finePaid: {
+      type: Boolean,
+      default: false,
+    },
+
+    finePaidAt: {
+      type: Date,
+      default: null,
     },
   },
   {

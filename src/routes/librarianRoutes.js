@@ -1,3 +1,4 @@
+
 const express = require("express");
 
 const {
@@ -5,6 +6,9 @@ const {
   verifyBookingPayment,
   returnBook,
   getBorrowingDetails,
+  scanReturnBorrowing,
+  createFinePayment,
+  verifyFinePayment,
 } = require("../controllers/librarianController");
 
 const {
@@ -14,6 +18,7 @@ const {
 
 const router = express.Router();
 
+// Existing booking workflow
 router.post(
   "/scan",
   protect,
@@ -26,6 +31,28 @@ router.post(
   protect,
   authorize("librarian", "admin"),
   verifyBookingPayment
+);
+
+// Fine and book-return workflow
+router.post(
+  "/return/scan",
+  protect,
+  authorize("librarian", "admin"),
+  scanReturnBorrowing
+);
+
+router.post(
+  "/return/fine-payment",
+  protect,
+  authorize("librarian", "admin"),
+  createFinePayment
+);
+
+router.post(
+  "/return/verify-fine-payment",
+  protect,
+  authorize("librarian", "admin"),
+  verifyFinePayment
 );
 
 router.post(

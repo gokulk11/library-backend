@@ -161,6 +161,7 @@ const updateLibrarianStatus = async (req, res) => {
 // ADMIN DASHBOARD
 // ==========================================
 
+
 const getDashboard = async (req, res) => {
   try {
     const now = new Date();
@@ -172,6 +173,7 @@ const getDashboard = async (req, res) => {
       totalBorrowings,
       activeBorrowings,
       overdueBorrowings,
+      overdueFineBorrowings,
       totalBookings,
       verifiedPayments,
     ] = await Promise.all([
@@ -193,12 +195,49 @@ const getDashboard = async (req, res) => {
         dueDate: { $lt: now },
       }),
 
+      Borrowing.find({
+        status: "borrowed",
+        dueDate: { $lt: now },
+      })
+        .select("dueDate")
+        .lean(),
+
       Booking.countDocuments(),
 
       Payment.countDocuments({
         status: "verified",
       }),
     ]);
+
+    // The due date itself is free.
+    // Fine starts on the following calendar day.
+    const outstandingOverdueFine = overdueFineBorrowings.reduce(
+      (total, borrowing) => {
+        const dueDate = new Date(borrowing.dueDate);
+
+        const dueDay = Date.UTC(
+          dueDate.getFullYear(),
+          dueDate.getMonth(),
+          dueDate.getDate()
+        );
+
+        const currentDay = Date.UTC(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate()
+        );
+
+        const overdueDays = Math.max(
+          0,
+          Math.floor(
+            (currentDay - dueDay) / (24 * 60 * 60 * 1000)
+          )
+        );
+
+        return total + overdueDays * 10;
+      },
+      0
+    );
 
     return res.json({
       success: true,
@@ -209,6 +248,7 @@ const getDashboard = async (req, res) => {
         totalBorrowings,
         activeBorrowings,
         overdueBorrowings,
+        outstandingOverdueFine,
         totalBookings,
         verifiedPayments,
       },
@@ -222,6 +262,7 @@ const getDashboard = async (req, res) => {
     });
   }
 };
+
 
 // ==========================================
 // GET ALL USERS
