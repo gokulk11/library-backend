@@ -12,6 +12,10 @@ const {
 } = require("../controllers/librarianController");
 
 const {
+  verifyMembershipPayment,
+  getPendingMembershipPayments,
+} = require("../controllers/membershipController");
+const {
   protect,
   authorize,
 } = require("../middleware/authMiddleware");
@@ -67,6 +71,22 @@ router.get(
   protect,
   authorize("librarian", "admin"),
   getBorrowingDetails
+);
+
+// Membership payment verification
+router.post(
+  "/membership/verify-payment",
+  protect,
+  authorize("librarian", "admin"),
+  verifyMembershipPayment
+);
+
+// List pending membership payments
+router.get(
+  "/membership/pending-payments",
+  protect,
+  authorize("librarian", "admin"),
+  getPendingMembershipPayments
 );
 
 module.exports = router;
