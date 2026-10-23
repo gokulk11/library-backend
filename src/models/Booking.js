@@ -1,3 +1,4 @@
+
 const mongoose = require("mongoose");
 
 const bookingItemSchema = new mongoose.Schema(
@@ -18,6 +19,21 @@ const bookingItemSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: 1,
+    },
+
+    // Whether this book uses the membership privilege.
+    // Only one book per booking should be allowed to use it.
+    useMembershipPrivilege: {
+      type: Boolean,
+      default: false,
+    },
+
+    // Borrowing fee for this individual book.
+    // Membership privilege makes this fee zero.
+    borrowingFee: {
+      type: Number,
+      required: true,
+      min: 0,
     },
   },
   { _id: false }
@@ -76,7 +92,6 @@ const bookingSchema = new mongoose.Schema(
       required: true,
     },
   },
-
   {
     timestamps: true,
   }

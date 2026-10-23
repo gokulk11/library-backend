@@ -1,8 +1,14 @@
+
 const mongoose = require("mongoose");
 
 const Booking = require("../models/Booking");
 const Book = require("../models/Book");
+const Membership = require("../models/Membership");
+const Borrowing = require("../models/Borrowing");
 
+const REGULAR_BORROWING_FEE = 50;
+
+// Create booking
 const createBooking = async (req, res) => {
   const session = await mongoose.startSession();
 
@@ -10,14 +16,21 @@ const createBooking = async (req, res) => {
     let booking;
 
     await session.withTransaction(async () => {
-      const { bookIds } = req.body;
+      const {
+        bookIds,
+        useMembershipPrivilege = false,
+        membershipBookId,
+      } = req.body;
 
       if (!Array.isArray(bookIds) || bookIds.length === 0) {
         throw new Error("At least one book is required");
       }
 
-      // Remove duplicate book IDs
-      const uniqueBookIds = [...new Set(bookIds)];
+      const uniqueBookIds = [...new Set(bookIds.map(String))];
+
+      if (uniqueBookIds.length !== bookIds.length) {
+        throw new Error("Duplicate books are not allowed");
+      }
 
       const books = await Book.find({
         _id: { $in: uniqueBookIds },
@@ -27,21 +40,89 @@ const createBooking = async (req, res) => {
         throw new Error("One or more books were not found");
       }
 
-      let totalAmount = 0;
+      let privilegedBookId = null;
 
+      if (useMembershipPrivilege) {
+        if (!membershipBookId) {
+          throw new Error(
+            "Select one book to use your membership privilege"
+          );
+        }
+
+        if (!uniqueBookIds.includes(String(membershipBookId))) {
+          throw new Error(
+            "The membership book must be included in your booking"
+          );
+        }
+
+        const now = new Date();
+
+        const membership = await Membership.findOne({
+          userId: req.user.userId,
+          status: "active",
+          startDate: { $lte: now },
+          expiryDate: { $gt: now },
+        })
+          .sort({ expiryDate: -1 })
+          .session(session);
+
+        if (!membership) {
+          throw new Error(
+            "You need an active membership to use this privilege"
+          );
+        }
+
+        // A membership point is unavailable while a membership
+        // borrowing is outstanding.
+        const outstandingMembershipBorrowing =
+          await Borrowing.findOne({
+            userId: req.user.userId,
+            borrowingType: "membership",
+            status: { $in: ["borrowed", "overdue"] },
+            returnedAt: null,
+          }).session(session);
+
+        if (outstandingMembershipBorrowing) {
+          throw new Error(
+            "Return your current membership book before using the privilege again"
+          );
+        }
+
+        // Prevent applying the same privilege to another booking
+        // that is awaiting pickup or payment verification.
+        const outstandingPrivilegeBooking = await Booking.findOne({
+          userId: req.user.userId,
+          status: { $in: ["pending", "ready"] },
+          "items.useMembershipPrivilege": true,
+        }).session(session);
+
+        if (outstandingPrivilegeBooking) {
+          throw new Error(
+            "You already have a booking using your membership privilege. Complete or cancel it first."
+          );
+        }
+
+        privilegedBookId = String(membershipBookId);
+      }
+
+      let totalAmount = 0;
       const items = [];
 
-      // Reserve every book
       for (const book of books) {
+        const isMembershipBook =
+          privilegedBookId === String(book._id);
+
+        const borrowingFee = isMembershipBook
+          ? 0
+          : REGULAR_BORROWING_FEE;
+
         const updatedBook = await Book.findOneAndUpdate(
           {
             _id: book._id,
             availableCopies: { $gt: 0 },
           },
           {
-            $inc: {
-              availableCopies: -1,
-            },
+            $inc: { availableCopies: -1 },
           },
           {
             new: true,
@@ -55,16 +136,17 @@ const createBooking = async (req, res) => {
           );
         }
 
-        totalAmount += book.rentalPrice;
+        totalAmount += borrowingFee;
 
         items.push({
           bookId: book._id,
           rentalPrice: book.rentalPrice,
           borrowingDays: book.borrowingDays,
+          useMembershipPrivilege: isMembershipBook,
+          borrowingFee,
         });
       }
 
-      // Booking expires after 24 hours
       const expiresAt = new Date();
       expiresAt.setHours(expiresAt.getHours() + 24);
 
@@ -77,21 +159,19 @@ const createBooking = async (req, res) => {
             expiresAt,
           },
         ],
-        {
-          session,
-        }
+        { session }
       );
 
       booking = createdBookings[0];
     });
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: "Booking created successfully",
       booking,
     });
   } catch (error) {
-    res.status(400).json({
+    return res.status(400).json({
       success: false,
       message: error.message,
     });
@@ -100,14 +180,11 @@ const createBooking = async (req, res) => {
   }
 };
 
-
 // Get customer's bookings
-
 const getMyBookings = async (req, res) => {
   const session = await mongoose.startSession();
 
   try {
-    // Process expired bookings before fetching the list.
     await session.withTransaction(async () => {
       const now = new Date();
 
@@ -117,25 +194,19 @@ const getMyBookings = async (req, res) => {
       }).session(session);
 
       for (const booking of expiredBookings) {
-        // Mark expired inside the transaction.
         booking.status = "expired";
-
         await booking.save({ session });
 
-        // Restore the reserved inventory.
         for (const item of booking.items) {
           await Book.findByIdAndUpdate(
             item.bookId,
-            {
-              $inc: { availableCopies: 1 },
-            },
+            { $inc: { availableCopies: 1 } },
             { session }
           );
         }
       }
     });
 
-    // Fetch bookings after expiration processing completes.
     const bookings = await Booking.find({
       userId: req.user.userId,
     })
@@ -145,12 +216,12 @@ const getMyBookings = async (req, res) => {
       )
       .sort({ createdAt: -1 });
 
-    res.json({
+    return res.json({
       success: true,
       bookings,
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: error.message,
     });
@@ -158,8 +229,6 @@ const getMyBookings = async (req, res) => {
     await session.endSession();
   }
 };
-
-
 
 // Get one booking
 const getBooking = async (req, res) => {
@@ -179,18 +248,17 @@ const getBooking = async (req, res) => {
       });
     }
 
-    res.json({
+    return res.json({
       success: true,
       booking,
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: error.message,
     });
   }
 };
-
 
 // Cancel booking
 const cancelBooking = async (req, res) => {
@@ -210,42 +278,30 @@ const cancelBooking = async (req, res) => {
       }
 
       if (!["pending", "ready"].includes(booking.status)) {
-        throw new Error(
-          "This booking cannot be cancelled"
-        );
+        throw new Error("This booking cannot be cancelled");
       }
 
-      // Return reserved copies
       for (const item of booking.items) {
         await Book.findByIdAndUpdate(
           item.bookId,
-          {
-            $inc: {
-              availableCopies: 1,
-            },
-          },
-          {
-            session,
-          }
+          { $inc: { availableCopies: 1 } },
+          { session }
         );
       }
 
       booking.status = "cancelled";
-
-      await booking.save({
-        session,
-      });
+      await booking.save({ session });
 
       cancelledBooking = booking;
     });
 
-    res.json({
+    return res.json({
       success: true,
       message: "Booking cancelled successfully",
       booking: cancelledBooking,
     });
   } catch (error) {
-    res.status(400).json({
+    return res.status(400).json({
       success: false,
       message: error.message,
     });
@@ -254,6 +310,7 @@ const cancelBooking = async (req, res) => {
   }
 };
 
+// Expire bookings and restore reserved copies
 const expireBookings = async (req, res) => {
   const session = await mongoose.startSession();
 
@@ -269,25 +326,14 @@ const expireBookings = async (req, res) => {
       }).session(session);
 
       for (const booking of bookings) {
-        // Change status first
         booking.status = "expired";
+        await booking.save({ session });
 
-        await booking.save({
-          session,
-        });
-
-        // Release every reserved book
         for (const item of booking.items) {
           await Book.findByIdAndUpdate(
             item.bookId,
-            {
-              $inc: {
-                availableCopies: 1,
-              },
-            },
-            {
-              session,
-            }
+            { $inc: { availableCopies: 1 } },
+            { session }
           );
         }
 
@@ -295,13 +341,13 @@ const expireBookings = async (req, res) => {
       }
     });
 
-    res.json({
+    return res.json({
       success: true,
       message: "Expired bookings processed",
       expiredCount,
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: error.message,
     });

@@ -6,8 +6,10 @@ const Payment = require("../models/Payment");
 const Borrowing = require("../models/Borrowing");
 const FinePayment = require("../models/FinePayment");
 const Book = require("../models/Book");
+const Membership = require("../models/Membership");
 
 const FINE_PER_DAY = 10;
+const REGULAR_BORROWING_FEE = 50;
 
 // Calculate overdue days using calendar dates.
 // The due date itself is free; the fine starts the following day.
@@ -92,6 +94,13 @@ const scanBooking = async (req, res) => {
           category: item.bookId.category,
           rentalPrice: item.rentalPrice,
           borrowingDays: item.borrowingDays,
+          borrowingFee:
+            item.borrowingFee ??
+            (item.useMembershipPrivilege
+              ? 0
+              : REGULAR_BORROWING_FEE),
+          useMembershipPrivilege:
+            item.useMembershipPrivilege === true,
         })),
       },
     });
@@ -134,21 +143,133 @@ const verifyBookingPayment = async (req, res) => {
         throw new Error("Booking is not ready for pickup");
       }
 
-      const payment = await Payment.findOne({
-        bookingId: booking._id,
-        userId: booking.userId,
-      }).session(session);
+      // Calculate the payable amount from the stored booking items.
+      // Never trust an amount supplied by the customer.
+      let calculatedTotal = 0;
+      let membershipBookCount = 0;
 
-      if (!payment) {
-        throw new Error("Payment record not found");
+      for (const item of booking.items) {
+        const usesPrivilege = item.useMembershipPrivilege === true;
+
+        const fee =
+          item.borrowingFee ??
+          (usesPrivilege ? 0 : REGULAR_BORROWING_FEE);
+
+        if (usesPrivilege) {
+          membershipBookCount++;
+
+          if (fee !== 0) {
+            throw new Error(
+              "The membership privilege book must have a zero borrowing fee"
+            );
+          }
+        } else if (fee !== REGULAR_BORROWING_FEE) {
+          throw new Error(
+            "Invalid regular borrowing fee. Please review the booking."
+          );
+        }
+
+        calculatedTotal += fee;
       }
 
-      if (payment.status !== "customer_claimed") {
+      if (membershipBookCount > 1) {
         throw new Error(
-          `Payment cannot be verified. Current status: ${payment.status}`
+          "Only one book can use the membership privilege per booking"
         );
       }
 
+      if (calculatedTotal !== booking.totalAmount) {
+        throw new Error(
+          "Booking total does not match its items. Please review the booking before issuing books."
+        );
+      }
+
+      const usesMembershipPrivilege = membershipBookCount === 1;
+
+      if (usesMembershipPrivilege) {
+        const now = new Date();
+
+        // Membership must still be active when the book is issued.
+        const membership = await Membership.findOne({
+          userId: booking.userId,
+          status: "active",
+          startDate: { $lte: now },
+          expiryDate: { $gt: now },
+        })
+          .sort({ expiryDate: -1 })
+          .session(session);
+
+        if (!membership) {
+          throw new Error(
+            "The customer's membership is not active. Cancel or update the membership booking before issuing."
+          );
+        }
+
+        // Do not let a customer use a second point while another
+        // membership book is still checked out.
+        const activeMembershipBorrowing = await Borrowing.findOne({
+          userId: booking.userId,
+          borrowingType: "membership",
+          status: { $in: ["borrowed", "overdue"] },
+          returnedAt: null,
+        }).session(session);
+
+        if (activeMembershipBorrowing) {
+          throw new Error(
+            "The customer already has a membership book checked out"
+          );
+        }
+
+        // Prevent two pending bookings from using the same point.
+        const competingBooking = await Booking.findOne({
+          _id: { $ne: booking._id },
+          userId: booking.userId,
+          status: { $in: ["pending", "ready"] },
+          "items.useMembershipPrivilege": true,
+        }).session(session);
+
+        if (competingBooking) {
+          throw new Error(
+            "Another booking already reserves this membership privilege. Resolve that booking first."
+          );
+        }
+      }
+
+      let payment = null;
+
+      if (calculatedTotal > 0) {
+        payment = await Payment.findOne({
+          bookingId: booking._id,
+          userId: booking.userId,
+        }).session(session);
+
+        if (!payment) {
+          throw new Error("Payment record not found");
+        }
+
+        if (payment.status !== "customer_claimed") {
+          throw new Error(
+            `Payment cannot be verified. Current status: ${payment.status}`
+          );
+        }
+
+        if (payment.amount !== calculatedTotal) {
+          throw new Error(
+            `Payment amount mismatch. Expected ₹${calculatedTotal}, received payment record for ₹${payment.amount}`
+          );
+        }
+
+        // Verify the actual UPI credit before calling this endpoint.
+        payment.status = "verified";
+        payment.verifiedAt = new Date();
+        payment.verifiedBy = req.user.userId;
+
+        await payment.save({ session });
+      }
+
+      // A zero-total membership booking needs no customer payment.
+      // The librarian must still confirm the customer's booking and
+      // membership eligibility before issuing it.
       const borrowings = [];
 
       for (const item of booking.items) {
@@ -163,12 +284,20 @@ const verifyBookingPayment = async (req, res) => {
 
         dueDate.setDate(dueDate.getDate() + item.borrowingDays);
 
+        const usesPrivilege = item.useMembershipPrivilege === true;
+
+        const fee =
+          item.borrowingFee ??
+          (usesPrivilege ? 0 : REGULAR_BORROWING_FEE);
+
         const created = await Borrowing.create(
           [
             {
               userId: booking.userId,
               bookId: item.bookId,
               bookingId: booking._id,
+              borrowingType: usesPrivilege ? "membership" : "regular",
+              borrowingFee: fee,
               borrowedAt,
               dueDate,
               status: "borrowed",
@@ -180,12 +309,6 @@ const verifyBookingPayment = async (req, res) => {
         borrowings.push(created[0]);
       }
 
-      payment.status = "verified";
-      payment.verifiedAt = new Date();
-      payment.verifiedBy = req.user.userId;
-
-      await payment.save({ session });
-
       booking.paymentStatus = "verified";
       booking.status = "picked_up";
 
@@ -195,25 +318,37 @@ const verifyBookingPayment = async (req, res) => {
         payment,
         booking,
         borrowings,
+        calculatedTotal,
       };
     });
 
     return res.json({
       success: true,
-      message: "Payment verified and all books issued successfully",
-      payment: {
-        id: result.payment._id,
-        amount: result.payment.amount,
-        status: result.payment.status,
-        verifiedAt: result.payment.verifiedAt,
-      },
+      message:
+        result.calculatedTotal === 0
+          ? "Membership book issued successfully"
+          : "Payment verified and all books issued successfully",
+      payment: result.payment
+        ? {
+            id: result.payment._id,
+            amount: result.payment.amount,
+            status: result.payment.status,
+            verifiedAt: result.payment.verifiedAt,
+          }
+        : {
+            amount: 0,
+            status: "not_required",
+          },
       booking: {
         id: result.booking._id,
         status: result.booking.status,
+        totalAmount: result.booking.totalAmount,
       },
       borrowings: result.borrowings.map((borrowing) => ({
         id: borrowing._id,
         bookId: borrowing.bookId,
+        borrowingType: borrowing.borrowingType,
+        borrowingFee: borrowing.borrowingFee,
         borrowedAt: borrowing.borrowedAt,
         dueDate: borrowing.dueDate,
         status: borrowing.status,
@@ -273,10 +408,11 @@ const scanReturnBorrowing = async (req, res) => {
         id: borrowing._id,
         customer: borrowing.userId,
         book: borrowing.bookId,
+        borrowingType: borrowing.borrowingType,
+        borrowingFee: borrowing.borrowingFee,
         borrowedAt: borrowing.borrowedAt,
         dueDate: borrowing.dueDate,
-        status:
-          overdueDays > 0 ? "overdue" : borrowing.status,
+        status: overdueDays > 0 ? "overdue" : borrowing.status,
         overdueDays,
         fineRate: FINE_PER_DAY,
         fineAmount,
@@ -342,7 +478,6 @@ const createFinePayment = async (req, res) => {
       });
     }
 
-    // Reuse an existing pending record for the same amount.
     let finePayment = await FinePayment.findOne({
       borrowingId: borrowing._id,
       status: "pending",
@@ -434,8 +569,6 @@ const verifyFinePayment = async (req, res) => {
         throw new Error("Book has already been returned");
       }
 
-      // Recalculate the fine at verification time.
-      // If another overdue day has started, the amount may have changed.
       const overdueDays = calculateOverdueDays(borrowing.dueDate);
       const currentFine = overdueDays * FINE_PER_DAY;
 
@@ -457,8 +590,10 @@ const verifyFinePayment = async (req, res) => {
       finePayment.verifiedBy = req.user.userId;
       finePayment.verifiedAt = verifiedAt;
 
-      if (typeof transactionReference === "string" &&
-          transactionReference.trim()) {
+      if (
+        typeof transactionReference === "string" &&
+        transactionReference.trim()
+      ) {
         finePayment.transactionReference = transactionReference.trim();
       }
 
@@ -501,6 +636,7 @@ const verifyFinePayment = async (req, res) => {
       borrowing: {
         id: result.borrowing._id,
         status: result.borrowing.status,
+        borrowingType: result.borrowing.borrowingType,
         returnedAt: result.borrowing.returnedAt,
         fineAmount: result.borrowing.fineAmount,
         finePaid: result.borrowing.finePaid,
@@ -608,6 +744,7 @@ const returnBook = async (req, res) => {
         returnedAt: result.borrowing.returnedAt,
         dueDate: result.borrowing.dueDate,
         status: result.borrowing.status,
+        borrowingType: result.borrowing.borrowingType,
         overdueDays: result.overdueDays,
         fineAmount: result.fineAmount,
         finePaid: result.borrowing.finePaid,

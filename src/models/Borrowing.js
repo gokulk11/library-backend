@@ -21,6 +21,22 @@ const borrowingSchema = new mongoose.Schema(
       required: true,
     },
 
+    // Distinguishes membership borrowing from regular borrowing.
+    borrowingType: {
+      type: String,
+      enum: ["regular", "membership"],
+      default: "regular",
+      index: true,
+    },
+
+    // Regular borrowing fee. Membership borrowing is included
+    // in the membership, so its borrowing fee is zero.
+    borrowingFee: {
+      type: Number,
+      default: 50,
+      min: 0,
+    },
+
     borrowedAt: {
       type: Date,
       default: Date.now,
